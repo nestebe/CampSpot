@@ -1,0 +1,22 @@
+{
+  "_comment": "Copier en .mcp.json (gitignoré) et remplacer les valeurs. Ne JAMAIS versionner le fichier rempli : il porte les identifiants superuser de l'instance PocketBase de production.",
+  "mcpServers": {
+    "browsermcp": {
+      "command": "cmd",
+      "args": ["/c", "npx", "@browsermcp/mcp@latest"]
+    },
+    "context7": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@upstash/context7-mcp", "--api-key", "REMPLACER_PAR_LA_CLE_CONTEXT7"]
+    },
+    "pocketbase": {
+      "command": "npx",
+      "args": ["-y", "pocketbase-mcp-bridge"],
+      "env": {
+        "POCKETBASE_URL": "https://api.espace-parrainage.fr/",
+        "POCKETBASE_ADMIN_EMAIL": "REMPLACER_PAR_L_EMAIL_SUPERUSER",
+        "POCKETBASE_ADMIN_PASSWORD": "REMPLACER_PAR_LE_MOT_DE_PASSE_SUPERUSER"
+      }
+    }
+  }
+}
