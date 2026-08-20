@@ -1,0 +1,96 @@
+# PocketBase — déploiement Coolify depuis GitHub.
+# =============================================================================
+# Réglages Coolify attendus (ressource « Docker Compose », source = ce dépôt) :
+#   Base Directory ............... /server
+#   Docker Compose Location ...... /docker-compose.yml  (relatif au Base Directory)
+#   Preserve Repository .......... DÉSACTIVÉ  (cf. plus bas — c'est important)
+#
+# Voir `server/README.md` pour la marche à suivre complète et l'import des données.
+#
+# ── Les deux décisions qui protègent les données ────────────────────────────
+#
+# 1. `pb_data` est un VOLUME NOMMÉ, pas un bind mount.
+#    Un volume nommé n'est jamais touché par un redéploiement (Coolify fait un
+#    `up -d`, jamais un `down -v`) et n'apparaît pas dans l'onglet « Storages »,
+#    donc il échappe au bug connu de Coolify qui fait un `rm -fr` sur un bind
+#    mount dont il croit à tort que c'est un fichier (issues #2873 / #3375).
+#    C'est aussi ce que fait le template PocketBase officiel de Coolify.
+#    ⚠️ Le volume réel s'appelle `<uuid-appli>_pb-data` : Coolify préfixe par
+#    l'UUID de la ressource et transforme `_` en `-`. Utile pour l'import.
+#
+# 2. « Preserve Repository » doit rester DÉSACTIVÉ.
+#    Activé, Coolify déverse le dépôt (`docker cp`) dans le dossier applicatif et
+#    peut supprimer un chemin de stockage qui entre en collision — c'est le
+#    scénario de l'issue #2897 (« Volumes erased on deployment »). On n'en a de
+#    toute façon aucun besoin : les hooks passent par l'image (cf. Dockerfile).
+#
+# ⚠️ Ne JAMAIS ajouter `- './pb_data:/pb_data'` ici : ce serait le retour du bind
+#    mount, avec en prime un dossier vide (le dépôt ne peuple pas ce chemin).
+
+services:
+  pocketbase:
+    # Image construite depuis `server/Dockerfile` = PocketBase + `pb_hooks/` du
+    # dépôt. C'est ce `build` qui fait qu'un `git push` met les hooks à jour.
+    build:
+      context: .
+      args:
+        PB_VERSION: ${PB_VERSION:-0.39.6}
+    restart: unless-stopped
+
+    # Pas de `container_name` : Coolify nomme lui-même les conteneurs (UUID de
+    # ressource + suffixe de déploiement). Un nom figé casse les déploiements de
+    # preview et provoque des collisions au redéploiement.
+
+    environment:
+      # Superuser appliqué à CHAQUE démarrage : l'entrypoint de l'image lance
+      # `pocketbase superuser upsert` dès que les deux variables sont non vides.
+      # Donc :
+      #   - le compte est recréé s'il a été supprimé ;
+      #   - changer le mot de passe ICI le change RÉELLEMENT au redéploiement ;
+      #   - après un import de base, ces valeurs REPRENNENT LA MAIN sur le compte
+      #     homonyme importé — c'est le moyen de garder un accès admin connu.
+      # Vider les variables ne supprime pas le compte existant, ça cesse
+      # simplement de le réappliquer.
+      #
+      # ⚠️ Renseignés dans l'UI Coolify (onglet Environment Variables), JAMAIS ici
+      #    et JAMAIS dans le dépôt — ce compte contrôle toute l'instance.
+      PB_ADMIN_EMAIL: ${PB_ADMIN_EMAIL}
+      PB_ADMIN_PASSWORD: ${PB_ADMIN_PASSWORD}
+      TZ: ${TZ:-Europe/Paris}
+
+      # Purge ciblée du cache du front (cf. pb_hooks/referrals.pb.js).
+      # Une variable définie dans l'UI Coolify n'atteint le conteneur que si elle est
+      # déclarée ici : sans ces deux lignes, `$os.getenv()` renverrait toujours vide et les
+      # hooks de révalidation ne feraient rien, silencieusement.
+      # `REVALIDATE_SECRET` doit valoir exactement `NUXT_REVALIDATE_SECRET` côté front.
+      FRONT_URL: ${FRONT_URL:-https://espace-parrainage.fr}
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET}
+
+    # Le proxy de Coolify (Traefik) route le domaine vers ce port : il n'a pas
+    # besoin d'être publié sur l'hôte, et ne pas le publier évite d'exposer
+    # PocketBase en clair, hors TLS, sur le port 8090 du serveur.
+    expose:
+      - '8090'
+    # Décommenter UNIQUEMENT pour un accès direct de dépannage :
+    # ports:
+    #   - '8090:8090'
+
+    volumes:
+      - pb_data:/pb_data
+      # `pb_public` reste un volume : l'app n'y sert rien aujourd'hui, mais PB
+      # doit pouvoir y écrire sans que ce soit perdu au redéploiement.
+      - pb_public:/pb_public
+      # Pas de montage pour `/pb_hooks` : le contenu vient de l'image.
+
+    healthcheck:
+      # `/api/health` est l'endpoint natif de PocketBase ; `wget` vient de
+      # busybox (image Alpine). Donne à Coolify un vrai signal de disponibilité.
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:8090/api/health']
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  pb_data:
+  pb_public:
